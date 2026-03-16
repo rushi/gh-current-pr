@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+set -e
+
+open_browser=false
+url_only=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --open) open_browser=true ;;
+        --url) url_only=true ;;
+        --help|-h)
+            echo "Usage: gh current-pr [--open] [--url]"
+            echo ""
+            echo "Prints the PR title, URL, merge status, and any failing checks for the current branch."
+            echo ""
+            echo "Flags:"
+            echo "  --open   Open the PR in the browser"
+            echo "  --url    Print only the PR URL (for scripting)"
+            exit 0
+            ;;
+    esac
+done
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+if [ -z "$branch" ]; then
+    echo "Error: not on a branch" >&2
+    exit 1
+fi
+
+# Extract owner/repo from a git remote URL (supports both https and ssh)
+extract_repo() {
+    local url="$1"
+    echo "$url" | sed -E 's|.*github\.com[:/]||; s|\.git$||'
+}
+
+# Find the repo and PR number for the branch. Outputs: "<repo> <number>"
+find_pr_ref() {
+    local branch="$1"
+
+    try_repo() {
+        local repo="$1"
+        local number
+        number=$(gh pr list --repo "$repo" --head "$branch" --json number --jq '.[0].number' 2>/dev/null || true)
+        if [ -n "$number" ] && [ "$number" != "null" ]; then
+            echo "$repo $number"
+            return 0
+        fi
+        return 1
+    }
+
+    # 1. Try tracking remote
+    local tracking
+    tracking=$(git rev-parse --abbrev-ref "${branch}@{upstream}" 2>/dev/null | cut -d/ -f1 || true)
+    if [ -n "$tracking" ]; then
+        local remote_url
+        remote_url=$(git remote get-url "$tracking" 2>/dev/null || true)
+        [ -n "$remote_url" ] && try_repo "$(extract_repo "$remote_url")" && return
+    fi
+
+    # 2. Try preferred remotes in order
+    for remote in upstream xola origin; do
+        local remote_url
+        remote_url=$(git remote get-url "$remote" 2>/dev/null || true)
+        [ -z "$remote_url" ] && continue
+        try_repo "$(extract_repo "$remote_url")" && return
+    done
+
+    # 3. Try all remotes
+    while IFS= read -r remote; do
+        local remote_url
+        remote_url=$(git remote get-url "$remote" 2>/dev/null || true)
+        [ -z "$remote_url" ] && continue
+        try_repo "$(extract_repo "$remote_url")" && return
+    done < <(git remote)
+}
+
+pr_ref=$(find_pr_ref "$branch")
+
+if [ -z "$pr_ref" ]; then
+    echo "No pull request found for branch: $branch" >&2
+    exit 1
+fi
+
+pr_repo=$(echo "$pr_ref" | cut -d' ' -f1)
+pr_number=$(echo "$pr_ref" | cut -d' ' -f2)
+
+# Fetch all details in one call
+pr_json=$(gh pr view "$pr_number" --repo "$pr_repo" \
+    --json title,url,isDraft,mergeable,mergeStateStatus,statusCheckRollup,reviews)
+
+pr_title=$(echo "$pr_json" | jq -r '.title')
+pr_url=$(echo "$pr_json" | jq -r '.url')
+
+if [ "$url_only" = true ]; then
+    echo "$pr_url"
+    exit 0
+fi
+is_draft=$(echo "$pr_json" | jq -r '.isDraft')
+mergeable=$(echo "$pr_json" | jq -r '.mergeable')
+merge_state=$(echo "$pr_json" | jq -r '.mergeStateStatus')
+
+# Merge status label
+if [ "$is_draft" = "true" ]; then
+    merge_label="Draft"
+elif [ "$mergeable" = "CONFLICTING" ]; then
+    merge_label="\e[0;91mConflicts\e[0m"
+elif [ "$merge_state" = "BLOCKED" ]; then
+    merge_label="\e[0;91mBlocked\e[0m"
+elif [ "$merge_state" = "CLEAN" ]; then
+    merge_label="Ready to merge"
+elif [ "$merge_state" = "BEHIND" ]; then
+    merge_label="Behind base branch"
+else
+    merge_label="$merge_state"
+fi
+
+check_name='.name // .context'
+
+failing_checks=$(echo "$pr_json" | jq -r "
+    .statusCheckRollup[]
+    | select(
+        .status == \"COMPLETED\"
+        and (.conclusion | ascii_downcase) != \"success\"
+        and (.conclusion | ascii_downcase) != \"skipped\"
+        and (.conclusion | ascii_downcase) != \"neutral\"
+      )
+    | $check_name
+" 2>/dev/null || true)
+
+pending_checks=$(echo "$pr_json" | jq -r "
+    .statusCheckRollup[]
+    | select(.status == \"IN_PROGRESS\" or .status == \"QUEUED\" or .status == \"PENDING\")
+    | $check_name
+" 2>/dev/null || true)
+
+last_review=$(echo "$pr_json" | jq -r '
+    .reviews
+    | map(select(.state != "PENDING"))
+    | last
+    | if . then "\(.author.login)|\(.submittedAt)" else "" end
+' 2>/dev/null || true)
+
+echo -e "\e[1m$pr_title\e[0m"
+echo "$pr_url"
+echo -e "Merge: $merge_label"
+if [ -n "$last_review" ]; then
+    review_author=$(echo "$last_review" | cut -d'|' -f1)
+    review_iso=$(echo "$last_review" | cut -d'|' -f2)
+    review_formatted=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$review_iso" "+%b %d, %Y %I:%M %p" 2>/dev/null \
+        || date -d "$review_iso" "+%b %d, %Y %I:%M %p" 2>/dev/null \
+        || echo "$review_iso")
+    echo "Last review: $review_author at $review_formatted"
+fi
+
+if [ -n "$failing_checks" ]; then
+    echo "Failing checks:"
+    while IFS= read -r check; do
+        echo "  - $check"
+    done <<< "$failing_checks"
+fi
+
+if [ -n "$pending_checks" ]; then
+    echo "In progress:"
+    while IFS= read -r check; do
+        echo "  - $check"
+    done <<< "$pending_checks"
+fi
+
+if [ "$open_browser" = true ]; then
+    open "$pr_url"
+fi
