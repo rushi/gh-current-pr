@@ -84,15 +84,17 @@ gh current-pr --help
 ## How it works
 
 1. Reads the current branch name.
-2. Looks for an open PR with that head branch via `gh pr list`, trying remotes in order: the branch's tracking remote, then `upstream`, `xola`, `origin`, then every other remote. This finds PRs opened from a fork.
+2. Looks for an open PR via `gh pr list`, using the upstream branch name and fork owner from the branch's tracking config. Remotes are tried in order: the tracking remote, then `upstream`, `origin`, then every other remote. This finds PRs opened from a fork without matching another fork's branch of the same name.
 3. Fetches title, merge status, reviews, and checks for the first match with `gh pr view`.
 
 ## Requirements
 
-- GitHub CLI (`gh`) v2.0+
-- `jq` for JSON parsing
-- `date` command (BSD or GNU)
+- Bash 3.2+ (macOS or Linux)
+- GitHub CLI (`gh`) v2.0+, logged in with `gh auth login`
+- `jq` 1.6+
 - Git repository with a pull request for the current branch
+
+Colour output is limited to terminals. Set `NO_COLOR=1` to turn it off.
 
 ## License
 
