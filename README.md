@@ -1,4 +1,4 @@
-## gh-current-pr
+# gh-current-pr
 
 A GitHub CLI extension that displays pull request information for your current branch, including title, URL, merge status, and CI check status.
 
@@ -51,14 +51,14 @@ In progress:
 
 `--url`
 
-Print only the PR URL for piping to other commands:
+Print only the PR URL:
 
 ```bash
 gh current-pr --url
 # https://github.com/owner/repo/pull/42
 ```
 
-Use with other commands:
+Pipe it to other commands:
 
 ```bash
 open $(gh current-pr --url)
@@ -83,11 +83,9 @@ gh current-pr --help
 
 ## How it works
 
-- Detects your current branch name
-- Searches across all git remotes (prioritizes upstream then origin)
-- Fetches PR details using `gh pr list` (supports PRs from forks)
-- Displays merge status, reviews, and CI check status
-- Fast single API call per invocation
+1. Reads the current branch name.
+2. Looks for an open PR with that head branch via `gh pr list`, trying remotes in order: the branch's tracking remote, then `upstream`, `xola`, `origin`, then every other remote. This finds PRs opened from a fork.
+3. Fetches title, merge status, reviews, and checks for the first match with `gh pr view`.
 
 ## Requirements
 
