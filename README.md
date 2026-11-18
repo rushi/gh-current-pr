@@ -96,6 +96,10 @@ gh current-pr --help
 
 Colour output is limited to terminals. Set `NO_COLOR=1` to turn it off.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
-MIT
+[MIT](LICENSE)
